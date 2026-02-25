@@ -1,224 +1,253 @@
 import { useEffect, useRef, useState } from "react";
 
 export default function App() {
-  const animationRef = useRef(null);
-  const lineRef = useRef(null);
   const scrollRef = useRef(null);
+  const playheadRef = useRef(null);
+  const animationRef = useRef(null);
 
-  const [lineX, setLineX] = useState(0);
-  const [isRunning, setIsRunning] = useState(false);
-  const [squares, setSquares] = useState([]);
   const [bpm, setBpm] = useState(130);
+  const [notes, setNotes] = useState([]);
+  const [isRightDown, setIsRightDown] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragOffset, setDragOffset] = useState(0);
 
-  const GRID_ROWS = 10;
+  const GRID_ROWS = 88;
+  const VISIBLE_ROWS = 30;
   const CELL_HEIGHT = 20;
-  const GRID_OFFSET_TOP = 200;
-
-  const direction = useRef(1);
-
-  // Horizontal distance between beats (can adjust for visual spacing)
-  const pixelsPerBeat = 50;
-
-  // Number of beats to render in grid
+  const CELL_WIDTH = 50;
   const TOTAL_BEATS = 500;
+  const TOTAL_WIDTH = TOTAL_BEATS * CELL_WIDTH;
+  const KEYBOARD_WIDTH = 80;
+  const SEEK_HEIGHT = 20;
 
-  const TOTAL_WIDTH = TOTAL_BEATS * pixelsPerBeat;
+  const NOTE_NAMES = [
+    "C","C#","D","D#","E",
+    "F","F#","G","G#","A","A#","B"
+  ];
 
-  // Pixels per frame at current BPM
-  const pixelsPerFrame = () => {
-    const beatsPerSecond = bpm / 60;
-    const speed = pixelsPerBeat * beatsPerSecond / 60;
-    return speed;
+  const getNote = (row) => {
+    const midi = 108 - row;
+    const note = NOTE_NAMES[midi % 12];
+    const octave = Math.floor(midi / 12) - 1;
+    return note + octave;
   };
+  const isBlack = (note) => note.includes("#");
 
-  const animate = () => {
-    setLineX((prev) => {
-      let newX = prev + pixelsPerFrame() * direction.current;
+  const pixelsPerFrame = () => (CELL_WIDTH * bpm / 60) / 60;
 
-      if (newX >= TOTAL_WIDTH - 5) {
-        cancelAnimationFrame(animationRef.current);
-        setIsRunning(false);
-        return TOTAL_WIDTH - 5;
-      }
+  // ===== PLAYHEAD ANIMATION =====
+  const start = () => {
+    const animate = () => {
+      if (!playheadRef.current || isDragging) return; // neanimē, ja vilkšana
+      const current = parseFloat(playheadRef.current.style.left || "0");
+      const next = current + pixelsPerFrame();
+      playheadRef.current.style.left = next + "px";
 
-      // Auto-scroll
-      if (scrollRef.current) {
-        const scrollLeft = scrollRef.current.scrollLeft;
-        const viewportWidth = scrollRef.current.clientWidth;
-        const margin = viewportWidth * 0.3;
-        if (newX - scrollLeft > viewportWidth - margin) {
-          scrollRef.current.scrollLeft = newX - (viewportWidth - margin);
-        } else if (newX - scrollLeft < margin) {
-          scrollRef.current.scrollLeft = Math.max(0, newX - margin);
-        }
-      }
+      // Trigger
+      setNotes(prev => prev.map(n => {
+        const noteLeft = n.beat * CELL_WIDTH;
+        const noteRight = noteLeft + CELL_WIDTH;
+        const triggered = next >= noteLeft && next <= noteRight;
+        return { ...n, triggered };
+      }));
 
-      return newX;
-    });
-
+      animationRef.current = requestAnimationFrame(animate);
+    };
     animationRef.current = requestAnimationFrame(animate);
   };
 
-  const start = () => {
-    if (!isRunning) {
-      setIsRunning(true);
-      animationRef.current = requestAnimationFrame(animate);
-    }
-  };
-  const pause = () => {
-    setIsRunning(false);
-    cancelAnimationFrame(animationRef.current);
-  };
+  const pause = () => cancelAnimationFrame(animationRef.current);
   const stop = () => {
-    setIsRunning(false);
     cancelAnimationFrame(animationRef.current);
-    setLineX(0);
-    if (scrollRef.current) scrollRef.current.scrollLeft = 0;
+    if (playheadRef.current) playheadRef.current.style.left = "0px";
+    setNotes(prev => prev.map(n => ({ ...n, triggered: false })));
   };
 
-  const handleCellClick = (row, beat) => {
+  // ===== ADD NOTE =====
+  const handleGridClick = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const beat = Math.floor(x / CELL_WIDTH);
+    const row = Math.floor(y / CELL_HEIGHT);
+    if (row < 0 || row >= GRID_ROWS) return;
     const id = `${row}-${beat}`;
-    setSquares((prev) => {
-      const exists = prev.find((sq) => sq.id === id);
-      if (exists) return prev;
-      return [...prev, { id, row, beat, triggered: false }];
-    });
+    setNotes(prev => prev.find(n => n.id === id) ? prev : [...prev, { id, row, beat, triggered: false }]);
   };
 
-  // Collision
-  useEffect(() => {
-    const lineRect = lineRef.current.getBoundingClientRect();
-    setSquares((prev) =>
-      prev.map((sq) => {
-        const el = document.getElementById(`square-${sq.id}`);
-        if (!el) return sq;
-        const rect = el.getBoundingClientRect();
-        const isColliding = !(
-          lineRect.right < rect.left ||
-          lineRect.left > rect.right ||
-          lineRect.bottom < rect.top ||
-          lineRect.top > rect.bottom
-        );
-        return { ...sq, triggered: isColliding };
-      })
-    );
-  }, [lineX]);
+  // ===== DELETE =====
+  const deleteAtPosition = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const beat = Math.floor(x / CELL_WIDTH);
+    const row = Math.floor(y / CELL_HEIGHT);
+    setNotes(prev => prev.filter(n => !(n.row === row && n.beat === beat)));
+  };
 
-  // Virtualization
-  const [visibleBeats, setVisibleBeats] = useState([0, 0]);
+  // ===== MOUSE EVENTS =====
   useEffect(() => {
-    const updateVisible = () => {
-      if (!scrollRef.current) return;
-      const scrollLeft = scrollRef.current.scrollLeft;
-      const viewportWidth = scrollRef.current.clientWidth;
-      const startBeat = Math.floor(scrollLeft / pixelsPerBeat) - 2;
-      const endBeat = Math.ceil((scrollLeft + viewportWidth) / pixelsPerBeat) + 2;
-      setVisibleBeats([Math.max(0, startBeat), Math.min(TOTAL_BEATS, endBeat)]);
+    const down = (e) => { if (e.button === 2) setIsRightDown(true); };
+    const up = () => { setIsRightDown(false); setIsDragging(false); };
+    const move = (e) => {
+      if (isRightDown) deleteAtPosition(e);
+      if (isDragging && playheadRef.current && scrollRef.current) {
+        let newLeft = e.clientX - dragOffset - KEYBOARD_WIDTH + scrollRef.current.scrollLeft;
+        newLeft = Math.max(0, Math.min(newLeft, TOTAL_WIDTH));
+        playheadRef.current.style.left = newLeft + "px";
+
+        // Trigger
+        setNotes(prev => prev.map(n => {
+          const noteLeft = n.beat * CELL_WIDTH;
+          const noteRight = noteLeft + CELL_WIDTH;
+          const triggered = newLeft >= noteLeft && newLeft <= noteRight;
+          return { ...n, triggered };
+        }));
+      }
     };
-    updateVisible();
-    scrollRef.current.addEventListener("scroll", updateVisible);
-    window.addEventListener("resize", updateVisible);
+    window.addEventListener("mousedown", down);
+    window.addEventListener("mouseup", up);
+    window.addEventListener("mousemove", move);
     return () => {
-      if (scrollRef.current) scrollRef.current.removeEventListener("scroll", updateVisible);
-      window.removeEventListener("resize", updateVisible);
+      window.removeEventListener("mousedown", down);
+      window.removeEventListener("mouseup", up);
+      window.removeEventListener("mousemove", move);
     };
-  }, []);
+  }, [isDragging, dragOffset, isRightDown]);
 
-  const [startBeat, endBeat] = visibleBeats;
+  // ===== SEEK WINDOW CLICK =====
+  const handleSeekClick = (e) => {
+    if (!playheadRef.current || !scrollRef.current) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const newLeft = Math.max(0, Math.min(x + scrollRef.current.scrollLeft, TOTAL_WIDTH));
+    playheadRef.current.style.left = newLeft + "px";
+
+    // Trigger update
+    setNotes(prev => prev.map(n => {
+      const noteLeft = n.beat * CELL_WIDTH;
+      const noteRight = noteLeft + CELL_WIDTH;
+      const triggered = newLeft >= noteLeft && newLeft <= noteRight;
+      return { ...n, triggered };
+    }));
+  };
 
   return (
-    <div style={{ width: "100vw", height: "100vh", background: "#111" }}>
-      {/* Pogas + BPM */}
-      <div style={{ padding: 20, color: "white" }}>
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#181818", color: "white" }}>
+      {/* Controls */}
+      <div style={{ padding: 10, position: "sticky", top: 0, background: "#181818", zIndex: 30 }}>
         <button onClick={start}>Start</button>
         <button onClick={pause} style={{ marginLeft: 10 }}>Pause</button>
         <button onClick={stop} style={{ marginLeft: 10 }}>Stop</button>
-        <div style={{ marginTop: 10 }}>
-          <label>BPM: </label>
-          <input
-            type="number"
-            step="0.01"
-            value={bpm}
-            onChange={(e) => setBpm(Number(e.target.value))}
-            style={{ width: 100, marginLeft: 10 }}
-          />
-        </div>
+        <span style={{ marginLeft: 20 }}>BPM:</span>
+        <input type="number" value={bpm} step="0.01" onChange={(e) => setBpm(Number(e.target.value))} style={{ width: 80 }}/>
       </div>
 
-      {/* Scroll */}
+      {/* Seek window */}
       <div
-        ref={scrollRef}
         style={{
-          overflowX: "scroll",
-          overflowY: "hidden",
-          whiteSpace: "nowrap",
-          borderTop: "1px solid #333",
+          height: SEEK_HEIGHT,
+          width: "100%",
+          background: "#333",
           position: "relative",
+          marginBottom: 2,
+          cursor: "pointer",
+          marginLeft: KEYBOARD_WIDTH
         }}
+        onClick={handleSeekClick}
       >
+        {/* Draggable line */}
         <div
-          style={{
-            width: TOTAL_WIDTH,
-            height: GRID_ROWS * CELL_HEIGHT + 100,
-            position: "relative",
+          ref={playheadRef}
+          onMouseDown={(e) => {
+            setIsDragging(true);
+            setDragOffset(e.clientX - e.currentTarget.getBoundingClientRect().left);
           }}
-        >
-          {/* Kvadrāti */}
-          {squares.map((sq) => (
-            <div
-              key={sq.id}
-              id={`square-${sq.id}`}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setSquares((prev) => prev.filter((item) => item.id !== sq.id));
-              }}
-              style={{
-                width: pixelsPerBeat,
-                height: CELL_HEIGHT,
-                position: "absolute",
-                top: GRID_OFFSET_TOP + sq.row * CELL_HEIGHT,
-                left: sq.beat * pixelsPerBeat,
-                background: sq.triggered ? "orange" : "red",
-                zIndex: 1,
-              }}
-            />
-          ))}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: parseFloat(playheadRef.current?.style.left || 0),
+            width: 3,
+            height: SEEK_HEIGHT,
+            background: "lime",
+            zIndex: 50,
+            cursor: "grab"
+          }}
+        />
+      </div>
 
-          {/* Līnija virs kvadrātiem */}
+      {/* Scrollable grid */}
+      <div ref={scrollRef} style={{ height: VISIBLE_ROWS * CELL_HEIGHT, overflow: "auto", position: "relative" }}>
+        <div style={{ display: "flex", position: "relative" }}>
+          {/* Keyboard */}
+          <div style={{
+            width: KEYBOARD_WIDTH,
+            position: "sticky",
+            left: 0,
+            top: 0,
+            zIndex: 20,
+            background: "#111",
+            display: "flex",
+            flexDirection: "column"
+          }}>
+            {Array.from({ length: GRID_ROWS }).map((_, row) => {
+              const note = getNote(row);
+              const black = isBlack(note);
+              return (
+                <div key={row} style={{
+                  height: CELL_HEIGHT,
+                  background: black ? "#222" : "#eee",
+                  color: black ? "white" : "black",
+                  fontSize: 11,
+                  display: "flex",
+                  alignItems: "center",
+                  paddingLeft: 6,
+                  borderBottom: "1px solid #444",
+                  boxSizing: "border-box"
+                }}>{note}</div>
+              );
+            })}
+          </div>
+
+          {/* Grid */}
           <div
-            ref={lineRef}
             style={{
-              width: 5,
+              position: "relative",
+              width: TOTAL_WIDTH,
+              height: GRID_ROWS * CELL_HEIGHT,
+              backgroundImage: `
+                linear-gradient(#2a2a2a 1px, transparent 1px),
+                linear-gradient(90deg, #2a2a2a 1px, transparent 1px)
+              `,
+              backgroundSize: `100% ${CELL_HEIGHT}px, ${CELL_WIDTH}px 100%`
+            }}
+            onClick={handleGridClick}
+            onContextMenu={(e) => { e.preventDefault(); deleteAtPosition(e); }}
+            onMouseMove={(e) => { if (isRightDown) deleteAtPosition(e); }}
+          >
+            {notes.map(n => (
+              <div key={n.id} style={{
+                position: "absolute",
+                top: n.row * CELL_HEIGHT,
+                left: n.beat * CELL_WIDTH,
+                width: CELL_WIDTH,
+                height: CELL_HEIGHT,
+                background: n.triggered ? "#ffcc66" : "#99ccff",
+                boxSizing: "border-box"
+              }}/>
+            ))}
+
+            {/* Playhead in grid */}
+            <div ref={playheadRef} style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              width: 3,
               height: GRID_ROWS * CELL_HEIGHT,
               background: "lime",
-              position: "absolute",
-              top: GRID_OFFSET_TOP,
-              left: lineX,
-              zIndex: 10,
-            }}
-          />
-
-          {/* Redzamie sektori ritmiski */}
-          {[...Array(GRID_ROWS)].map((_, row) =>
-            [...Array(endBeat - startBeat)].map((_, i) => {
-              const beat = startBeat + i;
-              return (
-                <div
-                  key={`${row}-${beat}`}
-                  onClick={() => handleCellClick(row, beat)}
-                  style={{
-                    width: pixelsPerBeat,
-                    height: CELL_HEIGHT,
-                    border: "1px solid #222",
-                    position: "absolute",
-                    top: GRID_OFFSET_TOP + row * CELL_HEIGHT,
-                    left: beat * pixelsPerBeat,
-                    cursor: "pointer",
-                  }}
-                />
-              );
-            })
-          )}
+              zIndex: 25
+            }}/>
+          </div>
         </div>
       </div>
     </div>

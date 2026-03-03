@@ -2,23 +2,22 @@ import { useEffect, useRef, useState } from "react";
 
 export default function App() {
   const scrollRef = useRef(null);
-  const playheadRef = useRef(null);
   const animationRef = useRef(null);
 
   const [bpm, setBpm] = useState(130);
   const [notes, setNotes] = useState([]);
   const [isRightDown, setIsRightDown] = useState(false);
+  const [playheadX, setPlayheadX] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
-  const [dragOffset, setDragOffset] = useState(0);
+  const [visibleRows, setVisibleRows] = useState(30);
 
   const GRID_ROWS = 88;
-  const VISIBLE_ROWS = 30;
-  const CELL_HEIGHT = 20;
-  const CELL_WIDTH = 50;
-  const TOTAL_BEATS = 500;
+  const CELL_HEIGHT = 22;
+  const CELL_WIDTH = 60;
+  const TOTAL_BEATS = 300;
   const TOTAL_WIDTH = TOTAL_BEATS * CELL_WIDTH;
   const KEYBOARD_WIDTH = 80;
-  const SEEK_HEIGHT = 20;
+  const SEEK_HEIGHT = 24;
 
   const NOTE_NAMES = [
     "C","C#","D","D#","E",
@@ -31,223 +30,351 @@ export default function App() {
     const octave = Math.floor(midi / 12) - 1;
     return note + octave;
   };
+
   const isBlack = (note) => note.includes("#");
 
-  const pixelsPerFrame = () => (CELL_WIDTH * bpm / 60) / 60;
+  const pixelsPerFrame = () => (CELL_WIDTH * bpm / 30) / 30;
 
-  // ===== PLAYHEAD ANIMATION =====
+  const getLoopEnd = () => {
+    if (notes.length === 0) return CELL_WIDTH * 4;
+
+    const lastBeat = Math.max(...notes.map(n => n.beat));
+    const bars = Math.ceil((lastBeat + 1) / 4);
+    return bars * 4 * CELL_WIDTH;
+  };
+
+  /* ================= AUTO RESIZE ================= */
+
+  useEffect(() => {
+    const updateVisibleRows = () => {
+      const controlsHeight = 70;
+      const availableHeight =
+        window.innerHeight - controlsHeight - SEEK_HEIGHT;
+
+      const rows = Math.floor(availableHeight / CELL_HEIGHT);
+      setVisibleRows(Math.max(10, rows));
+    };
+
+    updateVisibleRows();
+    window.addEventListener("resize", updateVisibleRows);
+
+    return () =>
+      window.removeEventListener("resize", updateVisibleRows);
+  }, []);
+
+  /* ================= PLAY ================= */
+
   const start = () => {
     const animate = () => {
-      if (!playheadRef.current || isDragging) return; // neanimē, ja vilkšana
-      const current = parseFloat(playheadRef.current.style.left || "0");
-      const next = current + pixelsPerFrame();
-      playheadRef.current.style.left = next + "px";
-
-      // Trigger
-      setNotes(prev => prev.map(n => {
-        const noteLeft = n.beat * CELL_WIDTH;
-        const noteRight = noteLeft + CELL_WIDTH;
-        const triggered = next >= noteLeft && next <= noteRight;
-        return { ...n, triggered };
-      }));
+      setPlayheadX(prev => {
+        const loopEnd = getLoopEnd();
+        const next = prev + pixelsPerFrame();
+        return next >= loopEnd ? 0 : next;
+      });
 
       animationRef.current = requestAnimationFrame(animate);
     };
+
     animationRef.current = requestAnimationFrame(animate);
   };
 
-  const pause = () => cancelAnimationFrame(animationRef.current);
+  const pause = () =>
+    cancelAnimationFrame(animationRef.current);
+
   const stop = () => {
     cancelAnimationFrame(animationRef.current);
-    if (playheadRef.current) playheadRef.current.style.left = "0px";
-    setNotes(prev => prev.map(n => ({ ...n, triggered: false })));
+    setPlayheadX(0);
+    setNotes(prev =>
+      prev.map(n => ({ ...n, triggered: false }))
+    );
   };
 
-  // ===== ADD NOTE =====
+  /* ================= TRIGGER ================= */
+
+  useEffect(() => {
+    setNotes(prev =>
+      prev.map(n => {
+        const left = n.beat * CELL_WIDTH;
+        const right = left + CELL_WIDTH;
+        const triggered =
+          playheadX >= left && playheadX <= right;
+        return { ...n, triggered };
+      })
+    );
+  }, [playheadX]);
+
+  /* ================= ADD NOTE ================= */
+
   const handleGridClick = (e) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
+
     const beat = Math.floor(x / CELL_WIDTH);
     const row = Math.floor(y / CELL_HEIGHT);
-    if (row < 0 || row >= GRID_ROWS) return;
     const id = `${row}-${beat}`;
-    setNotes(prev => prev.find(n => n.id === id) ? prev : [...prev, { id, row, beat, triggered: false }]);
+
+    setNotes(prev =>
+      prev.find(n => n.id === id)
+        ? prev
+        : [...prev, { id, row, beat, triggered: false }]
+    );
   };
 
-  // ===== DELETE =====
+  /* ================= DELETE ================= */
+
   const deleteAtPosition = (e) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
+
     const beat = Math.floor(x / CELL_WIDTH);
     const row = Math.floor(y / CELL_HEIGHT);
-    setNotes(prev => prev.filter(n => !(n.row === row && n.beat === beat)));
+
+    setNotes(prev =>
+      prev.filter(n => !(n.row === row && n.beat === beat))
+    );
   };
 
-  // ===== MOUSE EVENTS =====
-  useEffect(() => {
-    const down = (e) => { if (e.button === 2) setIsRightDown(true); };
-    const up = () => { setIsRightDown(false); setIsDragging(false); };
-    const move = (e) => {
-      if (isRightDown) deleteAtPosition(e);
-      if (isDragging && playheadRef.current && scrollRef.current) {
-        let newLeft = e.clientX - dragOffset - KEYBOARD_WIDTH + scrollRef.current.scrollLeft;
-        newLeft = Math.max(0, Math.min(newLeft, TOTAL_WIDTH));
-        playheadRef.current.style.left = newLeft + "px";
+  /* ================= MOUSE EVENTS ================= */
 
-        // Trigger
-        setNotes(prev => prev.map(n => {
-          const noteLeft = n.beat * CELL_WIDTH;
-          const noteRight = noteLeft + CELL_WIDTH;
-          const triggered = newLeft >= noteLeft && newLeft <= noteRight;
-          return { ...n, triggered };
-        }));
+  useEffect(() => {
+    const down = (e) => {
+      if (e.button === 2) setIsRightDown(true);
+    };
+
+    const up = () => {
+      setIsRightDown(false);
+      setIsDragging(false);
+    };
+
+    const move = (e) => {
+      if (isDragging && scrollRef.current) {
+        const rect =
+          scrollRef.current.getBoundingClientRect();
+
+        const x =
+          e.clientX - rect.left -
+          KEYBOARD_WIDTH +
+          scrollRef.current.scrollLeft;
+
+        setPlayheadX(
+          Math.max(0, Math.min(x, TOTAL_WIDTH))
+        );
       }
     };
+
     window.addEventListener("mousedown", down);
     window.addEventListener("mouseup", up);
     window.addEventListener("mousemove", move);
+
     return () => {
       window.removeEventListener("mousedown", down);
       window.removeEventListener("mouseup", up);
       window.removeEventListener("mousemove", move);
     };
-  }, [isDragging, dragOffset, isRightDown]);
+  }, [isDragging]);
 
-  // ===== SEEK WINDOW CLICK =====
-  const handleSeekClick = (e) => {
-    if (!playheadRef.current || !scrollRef.current) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const newLeft = Math.max(0, Math.min(x + scrollRef.current.scrollLeft, TOTAL_WIDTH));
-    playheadRef.current.style.left = newLeft + "px";
-
-    // Trigger update
-    setNotes(prev => prev.map(n => {
-      const noteLeft = n.beat * CELL_WIDTH;
-      const noteRight = noteLeft + CELL_WIDTH;
-      const triggered = newLeft >= noteLeft && newLeft <= noteRight;
-      return { ...n, triggered };
-    }));
-  };
+  /* ================= UI ================= */
 
   return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#181818", color: "white" }}>
+    <div style={{
+      height: "100vh",
+      background: "#121212",
+      color: "white",
+      display: "flex",
+      flexDirection: "column",
+      fontFamily: "sans-serif"
+    }}>
+
       {/* Controls */}
-      <div style={{ padding: 10, position: "sticky", top: 0, background: "#181818", zIndex: 30 }}>
+      <div style={{
+        padding: 15,
+        background: "#181818",
+        display: "flex",
+        gap: 15
+      }}>
         <button onClick={start}>Start</button>
-        <button onClick={pause} style={{ marginLeft: 10 }}>Pause</button>
-        <button onClick={stop} style={{ marginLeft: 10 }}>Stop</button>
-        <span style={{ marginLeft: 20 }}>BPM:</span>
-        <input type="number" value={bpm} step="0.01" onChange={(e) => setBpm(Number(e.target.value))} style={{ width: 80 }}/>
+        <button onClick={pause}>Pause</button>
+        <button onClick={stop}>Stop</button>
+
+        <span>BPM</span>
+        <input
+          type="number"
+          value={bpm}
+          onChange={(e) =>
+            setBpm(Number(e.target.value))
+          }
+          style={{ width: 70 }}
+        />
       </div>
 
-      {/* Seek window */}
+      {/* Seek */}
       <div
         style={{
           height: SEEK_HEIGHT,
-          width: "100%",
-          background: "#333",
-          position: "relative",
-          marginBottom: 2,
-          cursor: "pointer",
-          marginLeft: KEYBOARD_WIDTH
+          marginLeft: KEYBOARD_WIDTH,
+          background: "#1e1e1e",
+          position: "relative"
         }}
-        onClick={handleSeekClick}
+        onMouseDown={(e) => {
+          const rect =
+            e.currentTarget.getBoundingClientRect();
+          const x =
+            e.clientX -
+            rect.left +
+            scrollRef.current.scrollLeft;
+          setPlayheadX(x);
+          setIsDragging(true);
+        }}
       >
-        {/* Draggable line */}
         <div
-          ref={playheadRef}
-          onMouseDown={(e) => {
-            setIsDragging(true);
-            setDragOffset(e.clientX - e.currentTarget.getBoundingClientRect().left);
-          }}
           style={{
             position: "absolute",
-            top: 0,
-            left: parseFloat(playheadRef.current?.style.left || 0),
+            left: playheadX,
             width: 3,
             height: SEEK_HEIGHT,
-            background: "lime",
-            zIndex: 50,
-            cursor: "grab"
+            background: "#00ffcc"
           }}
         />
       </div>
 
-      {/* Scrollable grid */}
-      <div ref={scrollRef} style={{ height: VISIBLE_ROWS * CELL_HEIGHT, overflow: "auto", position: "relative" }}>
-        <div style={{ display: "flex", position: "relative" }}>
-          {/* Keyboard */}
-          <div style={{
-            width: KEYBOARD_WIDTH,
-            position: "sticky",
-            left: 0,
-            top: 0,
-            zIndex: 20,
-            background: "#111",
-            display: "flex",
-            flexDirection: "column"
-          }}>
-            {Array.from({ length: GRID_ROWS }).map((_, row) => {
-              const note = getNote(row);
-              const black = isBlack(note);
-              return (
-                <div key={row} style={{
-                  height: CELL_HEIGHT,
-                  background: black ? "#222" : "#eee",
-                  color: black ? "white" : "black",
-                  fontSize: 11,
-                  display: "flex",
-                  alignItems: "center",
-                  paddingLeft: 6,
-                  borderBottom: "1px solid #444",
-                  boxSizing: "border-box"
-                }}>{note}</div>
-              );
-            })}
-          </div>
+      {/* Grid */}
+      <div
+        ref={scrollRef}
+        style={{
+          height: visibleRows * CELL_HEIGHT,
+          overflow: "auto",
+          display: "flex"
+        }}
+      >
 
-          {/* Grid */}
+        {/* Keyboard */}
+        <div style={{
+          width: KEYBOARD_WIDTH,
+          position: "sticky",
+          left: 0,
+          background: "#101010",
+          zIndex: 5
+        }}>
+          {Array.from({ length: GRID_ROWS }).map((_, row) => {
+            const note = getNote(row);
+            const black = isBlack(note);
+
+            return (
+              <div key={row} style={{
+                height: CELL_HEIGHT,
+                background:
+                  black ? "#1a1a1a" : "#f0f0f0",
+                color:
+                  black ? "white" : "black",
+                paddingLeft: 5,
+                fontSize: 11,
+                display: "flex",
+                alignItems: "center",
+                borderBottom:
+                  "1px solid #333"
+              }}>
+                {note}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Piano Roll */}
+        <div
+          onClick={handleGridClick}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            deleteAtPosition(e);
+          }}
+          onMouseMove={(e) => {
+            if (isRightDown)
+              deleteAtPosition(e);
+          }}
+          style={{
+            position: "relative",
+            width: TOTAL_WIDTH,
+            height: GRID_ROWS * CELL_HEIGHT
+          }}
+        >
+
+          {/* Horizontal */}
+          {Array.from({ length: GRID_ROWS }).map((_, row) => {
+            const black =
+              isBlack(getNote(row));
+            return (
+              <div key={row}
+                style={{
+                  position: "absolute",
+                  top: row * CELL_HEIGHT,
+                  width: "100%",
+                  height: CELL_HEIGHT,
+                  background:
+                    black
+                      ? "#1b1b1b"
+                      : "#222",
+                  borderBottom:
+                    "1px solid #2a2a2a"
+                }}
+              />
+            );
+          })}
+
+          {/* Vertical */}
+          {Array.from({ length: TOTAL_BEATS }).map((_, beat) => (
+            <div key={beat}
+              style={{
+                position: "absolute",
+                left:
+                  beat * CELL_WIDTH,
+                width:
+                  beat % 4 === 0
+                    ? 2
+                    : 1,
+                height: "100%",
+                background:
+                  beat % 4 === 0
+                    ? "#555"
+                    : "#333"
+              }}
+            />
+          ))}
+
+          {/* Notes */}
+          {notes.map(n => (
+            <div key={n.id}
+              style={{
+                position: "absolute",
+                top:
+                  n.row *
+                  CELL_HEIGHT,
+                left:
+                  n.beat *
+                  CELL_WIDTH,
+                width:
+                  CELL_WIDTH,
+                height:
+                  CELL_HEIGHT,
+                background:
+                  n.triggered
+                    ? "#ff9900"
+                    : "#3399ff",
+                borderRadius: 4
+              }}
+            />
+          ))}
+
+          {/* Playhead */}
           <div
             style={{
-              position: "relative",
-              width: TOTAL_WIDTH,
-              height: GRID_ROWS * CELL_HEIGHT,
-              backgroundImage: `
-                linear-gradient(#2a2a2a 1px, transparent 1px),
-                linear-gradient(90deg, #2a2a2a 1px, transparent 1px)
-              `,
-              backgroundSize: `100% ${CELL_HEIGHT}px, ${CELL_WIDTH}px 100%`
-            }}
-            onClick={handleGridClick}
-            onContextMenu={(e) => { e.preventDefault(); deleteAtPosition(e); }}
-            onMouseMove={(e) => { if (isRightDown) deleteAtPosition(e); }}
-          >
-            {notes.map(n => (
-              <div key={n.id} style={{
-                position: "absolute",
-                top: n.row * CELL_HEIGHT,
-                left: n.beat * CELL_WIDTH,
-                width: CELL_WIDTH,
-                height: CELL_HEIGHT,
-                background: n.triggered ? "#ffcc66" : "#99ccff",
-                boxSizing: "border-box"
-              }}/>
-            ))}
-
-            {/* Playhead in grid */}
-            <div ref={playheadRef} style={{
               position: "absolute",
-              top: 0,
-              left: 0,
-              width: 3,
-              height: GRID_ROWS * CELL_HEIGHT,
-              background: "lime",
-              zIndex: 25
-            }}/>
-          </div>
+              left: playheadX,
+              width: 2,
+              height: "100%",
+              background: "#00ffcc"
+            }}
+          />
         </div>
       </div>
     </div>

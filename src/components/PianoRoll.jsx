@@ -29,7 +29,7 @@ export default function PianoRoll({
         height: GRID_ROWS * CELL_HEIGHT,
       }}
     >
-      {/* Grid ar horizontālām un vertikālām līnijām */}
+      
       <Grid
         GRID_ROWS={GRID_ROWS}
         TOTAL_BEATS={TOTAL_BEATS}
@@ -37,7 +37,7 @@ export default function PianoRoll({
         CELL_WIDTH={CELL_WIDTH}
       />
 
-      {/* Notis */}
+  
       <Notes
         notes={notes}
         CELL_HEIGHT={CELL_HEIGHT}

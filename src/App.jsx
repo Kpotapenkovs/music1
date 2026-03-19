@@ -5,6 +5,8 @@ import Keyboard from "./components/Keyboard";
 import PianoRoll from "./components/PianoRoll";
 import usePlayback from "./hooks/usePlayback";
 import useMouse from "./hooks/useMouse";
+import useAudio from "./hooks/useAudio";
+import { getNote } from "./utils/music";
 
 export default function App() {
   const scrollRef = useRef(null);
@@ -14,6 +16,7 @@ export default function App() {
   const [playheadX, setPlayheadX] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [isRightDown, setIsRightDown] = useState(false);
+  const { init, playNote } = useAudio();
 
   const GRID_ROWS = 88;
   const CELL_HEIGHT = 22;
@@ -22,6 +25,15 @@ export default function App() {
   const TOTAL_WIDTH = TOTAL_BEATS * CELL_WIDTH;
   const KEYBOARD_WIDTH = 80;
   const SEEK_HEIGHT = 24;
+
+
+
+
+
+  const handleStart = async () => {
+    await init();   
+    start();        
+  };
 
   /* ================= LOOP ================= */
 
@@ -55,9 +67,22 @@ export default function App() {
     TOTAL_WIDTH
   });
 
-  /* ================= TRIGGER ================= */
+  /* ================= TRIGGER + SOUND ================= */
 
   useEffect(() => {
+    notes.forEach(n => {
+      const left = n.beat * CELL_WIDTH;
+      const right = left + CELL_WIDTH;
+
+      const isNow =
+        playheadX >= left &&
+        playheadX <= right;
+
+      if (isNow && !n.triggered) {
+        playNote(getNote(n.row)); 
+      }
+    });
+
     setNotes(prev =>
       prev.map(n => {
         const left = n.beat * CELL_WIDTH;
@@ -73,22 +98,30 @@ export default function App() {
 
   /* ================= ADD NOTE ================= */
 
-  const handleGridClick = (e) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left + e.currentTarget.scrollLeft;
-    const y = e.clientY - rect.top + e.currentTarget.scrollTop; // y attiecībā uz PianoRoll
-  
-    const beat = Math.floor(x / CELL_WIDTH);
-    const row = Math.floor(y / CELL_HEIGHT);
-  
-    const id = `${row}-${beat}`;
-  
-    setNotes(prev =>
-      prev.find(n => n.id === id)
-        ? prev
-        : [...prev, { id, row, beat, triggered: false }]
-    );
-  };
+const handleGridClick = (e) => {
+  const rect = e.currentTarget.getBoundingClientRect();
+
+  const x =
+    e.clientX -
+    rect.left +
+    e.currentTarget.scrollLeft;
+
+  const y =
+    e.clientY -
+    rect.top +
+    e.currentTarget.scrollTop;
+
+  const beat = Math.floor(x / CELL_WIDTH);
+  const row = Math.floor(y / CELL_HEIGHT);
+
+  const id = `${row}-${beat}`;
+
+  setNotes(prev =>
+    prev.find(n => n.id === id)
+      ? prev
+      : [...prev, { id, row, beat, triggered: false }]
+  );
+};
 
   /* ================= DELETE NOTE ================= */
 
@@ -100,7 +133,10 @@ export default function App() {
       rect.left +
       e.currentTarget.scrollLeft;
   
-      const y = e.clientY - rect.top + e.currentTarget.scrollTop;
+    const y =
+      e.clientY -
+      rect.top +
+      e.currentTarget.scrollTop;
   
     const beat = Math.floor(x / CELL_WIDTH);
     const row = Math.floor(y / CELL_HEIGHT);
@@ -124,7 +160,7 @@ export default function App() {
       
       {/* Controls */}
       <Controls
-        start={start}
+        start={handleStart}  
         pause={pause}
         stop={stop}
         bpm={bpm}
@@ -153,8 +189,6 @@ export default function App() {
         <Keyboard
           GRID_ROWS={GRID_ROWS}
           CELL_HEIGHT={CELL_HEIGHT}
-          handleGridClick={handleGridClick}
-          deleteAtPosition={deleteAtPosition}
         />
 
         {/* Piano Roll */}
@@ -170,7 +204,6 @@ export default function App() {
           TOTAL_BEATS={TOTAL_BEATS}
           TOTAL_WIDTH={TOTAL_WIDTH}
         />
-        
       </div>
     </div>
   );

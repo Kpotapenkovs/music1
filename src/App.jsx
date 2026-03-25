@@ -5,18 +5,17 @@ import Keyboard from "./components/Keyboard";
 import PianoRoll from "./components/PianoRoll";
 import usePlayback from "./hooks/usePlayback";
 import useMouse from "./hooks/useMouse";
-import useAudio from "./hooks/useAudio";
-import { getNote } from "./utils/music";
+import useKeyboardPlay from "./hooks/useKeyboardPlay";
 
 export default function App() {
   const scrollRef = useRef(null);
+  const audioCtxRef = useRef(null);
 
   const [bpm, setBpm] = useState(130);
   const [notes, setNotes] = useState([]);
   const [playheadX, setPlayheadX] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [isRightDown, setIsRightDown] = useState(false);
-  const { init, playNote } = useAudio();
 
   const GRID_ROWS = 88;
   const CELL_HEIGHT = 22;
@@ -26,28 +25,48 @@ export default function App() {
   const KEYBOARD_WIDTH = 80;
   const SEEK_HEIGHT = 24;
 
+  /* ================= AUDIO ================= */
+  useEffect(() => {
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+    }
+  }, []);
 
+  const playNote = (note) => {
+    const ctx = audioCtxRef.current;
+    if (!ctx) return;
 
+    if (ctx.state === "suspended") ctx.resume();
 
+    const pitch = GRID_ROWS - note.row - 1;
+    const freq = 440 * Math.pow(2, (pitch - 49) / 12);
 
-  const handleStart = async () => {
-    await init();   
-    start();        
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(freq, ctx.currentTime);
+
+    gain.gain.setValueAtTime(0, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.01);
+    gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.2);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.start();
+    osc.stop(ctx.currentTime + 0.2);
   };
 
   /* ================= LOOP ================= */
-
   const getLoopEnd = () => {
     if (notes.length === 0) return CELL_WIDTH * 4;
-
     const lastBeat = Math.max(...notes.map(n => n.beat));
     const bars = Math.ceil((lastBeat + 1) / 4);
-
     return bars * 4 * CELL_WIDTH;
   };
 
   /* ================= PLAYBACK ================= */
-
   const { start, pause, stop } = usePlayback({
     bpm,
     CELL_WIDTH,
@@ -56,7 +75,6 @@ export default function App() {
   });
 
   /* ================= MOUSE ================= */
-
   useMouse({
     isDragging,
     setIsDragging,
@@ -67,29 +85,24 @@ export default function App() {
     TOTAL_WIDTH
   });
 
-  /* ================= TRIGGER + SOUND ================= */
+  /* ================= KEYBOARD ================= */
+  useKeyboardPlay({
+    onNoteOn: () => {}, // ❗ tikai skaņa, nevis grid
+    onNoteOff: () => {}
+  });
 
+  /* ================= TRIGGER ================= */
   useEffect(() => {
-    notes.forEach(n => {
-      const left = n.beat * CELL_WIDTH;
-      const right = left + CELL_WIDTH;
-
-      const isNow =
-        playheadX >= left &&
-        playheadX <= right;
-
-      if (isNow && !n.triggered) {
-        playNote(getNote(n.row)); 
-      }
-    });
-
     setNotes(prev =>
       prev.map(n => {
         const left = n.beat * CELL_WIDTH;
         const right = left + CELL_WIDTH;
 
-        const triggered =
-          playheadX >= left && playheadX <= right;
+        const triggered = playheadX >= left && playheadX <= right;
+
+        if (triggered && !n.triggered) {
+          playNote(n); // 🔊 playback skaņa
+        }
 
         return { ...n, triggered };
       })
@@ -97,57 +110,38 @@ export default function App() {
   }, [playheadX]);
 
   /* ================= ADD NOTE ================= */
-
-const handleGridClick = (e) => {
-  const rect = e.currentTarget.getBoundingClientRect();
-
-  const x =
-    e.clientX -
-    rect.left +
-    e.currentTarget.scrollLeft;
-
-  const y =
-    e.clientY -
-    rect.top +
-    e.currentTarget.scrollTop;
-
-  const beat = Math.floor(x / CELL_WIDTH);
-  const row = Math.floor(y / CELL_HEIGHT);
-
-  const id = `${row}-${beat}`;
-
-  setNotes(prev =>
-    prev.find(n => n.id === id)
-      ? prev
-      : [...prev, { id, row, beat, triggered: false }]
-  );
-};
-
-  /* ================= DELETE NOTE ================= */
-
-  const deleteAtPosition = (e) => {
+  const handleGridClick = (e) => {
     const rect = e.currentTarget.getBoundingClientRect();
-  
-    const x =
-      e.clientX -
-      rect.left +
-      e.currentTarget.scrollLeft;
-  
-    const y =
-      e.clientY -
-      rect.top +
-      e.currentTarget.scrollTop;
-  
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
     const beat = Math.floor(x / CELL_WIDTH);
     const row = Math.floor(y / CELL_HEIGHT);
-  
+
+    const id = `${row}-${beat}`;
+
+    setNotes(prev =>
+      prev.find(n => n.id === id)
+        ? prev
+        : [...prev, { id, row, beat, triggered: false }]
+    );
+  };
+
+  /* ================= DELETE ================= */
+  const deleteAtPosition = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    const beat = Math.floor(x / CELL_WIDTH);
+    const row = Math.floor(y / CELL_HEIGHT);
+
     setNotes(prev =>
       prev.filter(n => !(n.row === row && n.beat === beat))
     );
   };
 
   /* ================= UI ================= */
-
   return (
     <div style={{
       height: "100vh",
@@ -158,16 +152,14 @@ const handleGridClick = (e) => {
       fontFamily: "sans-serif"
     }}>
       
-      {/* Controls */}
       <Controls
-        start={handleStart}  
+        start={start}
         pause={pause}
         stop={stop}
         bpm={bpm}
         setBpm={setBpm}
       />
 
-      {/* Seek */}
       <SeekBar
         playheadX={playheadX}
         setPlayheadX={setPlayheadX}
@@ -177,7 +169,6 @@ const handleGridClick = (e) => {
         SEEK_HEIGHT={SEEK_HEIGHT}
       />
 
-      {/* Grid */}
       <div
         ref={scrollRef}
         style={{
@@ -185,13 +176,11 @@ const handleGridClick = (e) => {
           display: "flex"
         }}
       >
-        {/* Keyboard */}
         <Keyboard
           GRID_ROWS={GRID_ROWS}
           CELL_HEIGHT={CELL_HEIGHT}
         />
 
-        {/* Piano Roll */}
         <PianoRoll
           notes={notes}
           handleGridClick={handleGridClick}
